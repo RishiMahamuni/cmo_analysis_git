@@ -10,7 +10,6 @@ Created on Thu Jan  2 11:07:27 2020
 from __future__ import print_function
 import importlib
 from configparser import ConfigParser
-
 import emoji
 import pandas as pd
 import nltk

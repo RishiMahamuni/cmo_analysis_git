@@ -3,7 +3,7 @@ from nltk import word_tokenize
 from nltk.stem import WordNetLemmatizer
 import re
 from flask import Flask, jsonify
-
+id = 100
 
 
 def english_intent():

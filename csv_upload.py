@@ -29,6 +29,9 @@ with open(dump_path, encoding='utf-8') as F:
     json_data = json.loads(F.read())
 
 id_list = list(json_data.keys())
+new_list = id_list
+
+
 
 base_json = {
         "colors": [
