@@ -4,7 +4,7 @@ from nltk.stem import WordNetLemmatizer
 import re
 from flask import Flask, jsonify
 id = 100
-
+id1 = 200
 
 def english_intent():
     df = pd.read_csv(r'C:\Users\RISHIKEESH\BIG\CMO\eng.csv')
@@ -19,6 +19,7 @@ def english_intent():
     #words = cleaning(sentences)
     #print(words)
     print('success')
+
 
 
 
