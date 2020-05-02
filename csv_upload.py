@@ -14,6 +14,8 @@ from tqdm import tqdm
 import json
 import emoji
 from flask_cors import CORS
+from rasa_nlu.model import Interpreter
+from tensorflow import keras
 
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx'}
@@ -29,8 +31,6 @@ with open(dump_path, encoding='utf-8') as F:
     json_data = json.loads(F.read())
 
 id_list = list(json_data.keys())
-new_list = id_list
-
 
 
 base_json = {
@@ -198,6 +198,176 @@ def word_clean_intent(sent):
     return words
 
 
+
+
+def new_intent_clean(s):
+    clean = re.sub(r'[^ a-z A-Z 0-9]', " ", str(s)).lower()
+    clean = emoji.demojize(clean)
+    return clean
+
+
+
+def new_intent(df_dict):
+    interpreter = Interpreter.load("./models/current/intentClassifier")
+
+    #predicting and saving intents
+    for k, v in tqdm(df_dict.items()):
+        df_dict[k]['message'] = df_dict[k]['message'].apply(new_intent_clean)
+        df_dict[k]['intent'] = df_dict[k]['message'].apply(lambda x: interpreter.parse(x)['intent']['name'])
+        df_dict[k].dropna(inplace=True)
+        #print(k)
+        #print(df_dict[k].isna().sum())
+
+    return df_dict
+
+
+
+
+def data_processing(path):
+    df_dict = {}
+    df_sent = {}
+
+    xls = xlrd.open_workbook(path, on_demand=True)
+    sheets = xls.sheet_names()
+
+    # reading the data
+    print('reading a data')
+    for i in tqdm(sheets):
+        df_dict.update({i.split('.', 1)[0]: pd.read_excel(path, sheet_name=i)})
+
+    # deleting unused columns
+    print('Deleting the unused column \n')
+    for k, v in tqdm(df_dict.items()):
+        df_dict[k].drop(['path', 'id', 'parent_id', 'level', 'object_id', 'object_type', 'query_status', 'query_type',
+                         'query_status', 'query_time', 'description', 'from.name', 'from.id', 'length', 'name'],
+                        axis='columns', inplace=True)
+        df_dict[k]['message_length'] = df_dict[k]['message'].str.len()
+        df_dict[k].dropna(inplace=True)
+
+
+    df_dict = lang_iden(df_dict)
+
+
+    print('creating sentiment score \n')
+    for k, v in tqdm(df_dict.items()):
+        df_sent.update({k: sentiment_analysis(df_dict[k])})
+
+    df_dict = new_intent(df_dict)
+
+    return df_dict, df_sent
+
+
+
+#json data generator
+def json_data_gen(df_dict, df_sent):
+    new_dict = {}
+    print('Data extraction process')
+    for k, v in df_dict.items():
+        # positive and negative comment count
+
+        p = list(df_sent[k][df_sent[k]['compound'] > 0].count())
+        pos = p[0]
+        n = list(df_sent[k][df_sent[k]['compound'] < 0].count())
+        neg = n[0]
+
+        # percentage count of categories
+        values = df_dict[k]['intent'].value_counts(dropna=False).keys().tolist()
+        counts = df_dict[k]['intent'].value_counts(dropna=False).tolist()
+        value_dict = dict(zip(values, counts))
+
+        for r, u in value_dict.items():
+            new_dict.update({r: percentage_match(df_dict[k].shape[0], u)})
+
+        # message separation for the 1.asking help 2. willing to help
+
+        ask = df_dict[k][df_dict[k]['intent'] == 'asking_help']
+        will = df_dict[k][df_dict[k]['intent'] == 'willing_to_help']
+        comments = pd.concat([ask, will])
+        comments = comments.sort_values('message_length', ascending=False)
+        comments.insert(0, 'id', range(0, 0 + len(comments)))
+        comments.drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',
+                      inplace=True)
+        comments.rename(columns={'id.1': 'user_id'}, inplace=True)
+        comm_j = comments.to_json(orient='records')
+
+        json_dict.update(
+            {k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j}})
+
+    return json_dict
+
+
+######## processing functions section ends #############
+
+
+
+
+@app.route('/upload')
+def upload_file():
+    return render_template('upload.html')
+
+
+@app.route("/uploader", methods=["POST"])
+def upload():
+    df_dict = {}
+    if request.method == 'POST':
+        # check if the post request has the file part
+        if 'file' not in request.files:
+            flash('No file part')
+            return redirect(request.url)
+        file = request.files['file']
+        # if user does not select file, browser also
+        # submit an empty part without filename
+        if file.filename == '':
+            flash('No selected file')
+            return redirect(request.url)
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+            df_dict, df_sent = data_processing(path)
+
+            json_dict = json_data_gen(df_dict, df_sent)
+            print(json_dict.keys())
+
+            with open(dump_path, 'w') as fp:
+                json.dump(json_dict, fp)
+
+            return " success "
+
+
+@app.route('/get_data/id_list/', methods=['GET'])
+def get_tasks1():
+    return jsonify(id_list)
+
+
+@app.route('/get_data/<page_id>', methods=['GET'])
+def page(page_id):
+    page_id = page_id
+    if page_id in id_list:
+        base_json['barChartData'] = [
+            {'data': [json_data[page_id]['sentiment']['positive']], 'label': 'Positive', 'backgroundColor': '#9AECDB',
+             'barPercentage': 0.2},
+            {'data': [json_data[page_id]['sentiment']['negative']], 'label': 'Negative', 'backgroundColor': '#FD7272',
+             'barPercentage': 0.2}]
+        base_json['pieChartData']['labels'] = list(json_data[page_id]['piechart'].keys())
+        base_json['pieChartData']['count'] = list(json_data[page_id]['piechart'].values())
+        base_json['usersData'] = json_data[page_id]['comments']
+
+        return jsonify(base_json)
+    else:
+        print('please enter correct id')
+
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+
+'''
 def intent_analysis(df_dict):
     asking_for_help = ['issue', 'issues', 'suffering', 'ask', 'help', 'support', 'hindi', 'milk', 'product', 'ration',
                        'groceries', 'medical', 'medicine', 'doctor', 'emi', 'rent', 'tension',
@@ -300,136 +470,4 @@ def intent_analysis(df_dict):
         df_dict[k]['intent'] = df_dict[k]['intent'].fillna('miscellaneous_msg')
 
     return df_dict
-
-
-def data_processing(path):
-    df_dict = {}
-    df_sent = {}
-
-    xls = xlrd.open_workbook(path, on_demand=True)
-    sheets = xls.sheet_names()
-
-    # reading the data
-    for i in sheets:
-        df_dict.update({i.split('.', 1)[0]: pd.read_excel(path, sheet_name=i)})
-
-    # deleting unused columns
-    print('Deleting the unused column \n')
-    for k, v in tqdm(df_dict.items()):
-        df_dict[k].drop(['path', 'id', 'parent_id', 'level', 'object_id', 'object_type', 'query_status', 'query_type',
-                         'query_status', 'query_time', 'description', 'from.name', 'from.id', 'length', 'name'],
-                        axis='columns', inplace=True)
-        df_dict[k]['message_length'] = df_dict[k]['message'].str.len()
-        df_dict[k].dropna(inplace=True)
-
-
-    df_dict = lang_iden(df_dict)
-
-
-    print('creating sentiment score \n')
-    for k, v in tqdm(df_dict.items()):
-        df_sent.update({k: sentiment_analysis(df_dict[k])})
-
-    df_dict = intent_analysis(df_dict)
-
-    return df_dict, df_sent
-
-
-def json_data_gen(df_dict, df_sent):
-    new_dict = {}
-    print('Data extraction process')
-    for k, v in df_dict.items():
-        # positive and negative comment count
-
-        p = list(df_sent[k][df_sent[k]['compound'] > 0].count())
-        pos = p[0]
-        n = list(df_sent[k][df_sent[k]['compound'] < 0].count())
-        neg = n[0]
-
-        # percentage count of categories
-        values = df_dict[k]['intent'].value_counts(dropna=False).keys().tolist()
-        counts = df_dict[k]['intent'].value_counts(dropna=False).tolist()
-        value_dict = dict(zip(values, counts))
-
-        for r, u in value_dict.items():
-            new_dict.update({r: percentage_match(df_dict[k].shape[0], u)})
-
-        # message separation for the 1.asking help 2. willing to help
-
-        ask = df_dict[k][df_dict[k]['intent'] == 'asking_help']
-        will = df_dict[k][df_dict[k]['intent'] == 'willing_to_help']
-        comments = pd.concat([ask, will])
-        comments.insert(0, 'id', range(0, 0 + len(comments)))
-        comments.drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',
-                      inplace=True)
-        comments.rename(columns={'id.1': 'user_id'}, inplace=True)
-        comm_j = comments.to_json(orient='records')
-
-        json_dict.update(
-            {k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j}})
-
-    return json_dict
-
-
-######## processing functions section ends #############
-
-
-@app.route('/upload')
-def upload_file():
-    return render_template('upload.html')
-
-
-@app.route("/uploader", methods=["POST"])
-def upload():
-    df_dict = {}
-    if request.method == 'POST':
-        # check if the post request has the file part
-        if 'file' not in request.files:
-            flash('No file part')
-            return redirect(request.url)
-        file = request.files['file']
-        # if user does not select file, browser also
-        # submit an empty part without filename
-        if file.filename == '':
-            flash('No selected file')
-            return redirect(request.url)
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-
-            df_dict, df_sent = data_processing(path)
-            json_dict = json_data_gen(df_dict, df_sent)
-            print(json_dict.keys())
-
-            with open(dump_path, 'w') as fp:
-                json.dump(json_dict, fp)
-
-            return " success "
-
-
-@app.route('/get_data/id_list/', methods=['GET'])
-def get_tasks1():
-    return jsonify(id_list)
-
-
-@app.route('/get_data/<page_id>', methods=['GET'])
-def page(page_id):
-    page_id = page_id
-    if page_id in id_list:
-        base_json['barChartData'] = [
-            {'data': [json_data[page_id]['sentiment']['positive']], 'label': 'Positive', 'backgroundColor': '#9AECDB',
-             'barPercentage': 0.2},
-            {'data': [json_data[page_id]['sentiment']['negative']], 'label': 'Negative', 'backgroundColor': '#FD7272',
-             'barPercentage': 0.2}]
-        base_json['pieChartData']['labels'] = list(json_data[page_id]['piechart'].keys())
-        base_json['pieChartData']['count'] = list(json_data[page_id]['piechart'].values())
-        base_json['usersData'] = json_data[page_id]['comments']
-
-        return jsonify(base_json)
-    else:
-        print('please enter correct id')
-
-
-if __name__ == '__main__':
-    app.run(debug=True)
+'''

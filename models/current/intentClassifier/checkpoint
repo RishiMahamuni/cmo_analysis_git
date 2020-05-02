@@ -1,0 +1,2 @@
+model_checkpoint_path: "C:\\Users\\RISHIKEESH\\PycharmProjects\\rasa_intent_classifier\\models\\current\\intentClassifier\\component_5_EmbeddingIntentClassifier.ckpt"
+all_model_checkpoint_paths: "C:\\Users\\RISHIKEESH\\PycharmProjects\\rasa_intent_classifier\\models\\current\\intentClassifier\\component_5_EmbeddingIntentClassifier.ckpt"

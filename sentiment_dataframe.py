@@ -141,10 +141,8 @@ def word_clean_intent(sent):
 
 
 
-def new_intent_clean(s):
-    clean = re.sub(r'[^ a-z A-Z 0-9]', " ", str(s)).lower()
-    clean = emoji.demojize(clean)
-    return clean
+
+
 
 
 def intent_analysis(df_dict):
@@ -249,6 +247,12 @@ def intent_analysis(df_dict):
         df_dict[k]['intent'] = df_dict[k]['intent'].fillna('miscellaneous_msg')
 
     return df_dict
+
+
+def new_intent_clean(s):
+    clean = re.sub(r'[^ a-z A-Z 0-9]', " ", str(s)).lower()
+    clean = emoji.demojize(clean)
+    return clean
 
 
 
