@@ -16,6 +16,11 @@ import emoji
 from flask_cors import CORS
 from rasa_nlu.model import Interpreter
 from tensorflow import keras
+import numpy as np
+import datetime
+from datetime import date
+import re
+
 
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx'}
@@ -27,10 +32,17 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 js_name = 'json_dict.json'
 dump_path = os.path.join(app.config['UPLOAD_FOLDER'], js_name)
 
-with open(dump_path, encoding='utf-8') as F:
-    json_data = json.loads(F.read())
 
-id_list = list(json_data.keys())
+
+    # reading existing keys from the json
+with open(dump_path, encoding='utf-8') as F:
+    try:
+        json_data = json.loads(F.read())
+        id_list = list(json_data.keys())
+    except ValueError:
+        print('Decoding JSON has failed')
+        id_list =[]
+        json_data = {}
 
 
 base_json = {
@@ -227,34 +239,42 @@ def data_processing(path):
     df_dict = {}
     df_sent = {}
 
+
     xls = xlrd.open_workbook(path, on_demand=True)
     sheets = xls.sheet_names()
 
-    # reading the data
-    print('reading a data')
-    for i in tqdm(sheets):
-        df_dict.update({i.split('.', 1)[0]: pd.read_excel(path, sheet_name=i)})
+    updated_sheet = list(np.setdiff1d(sheets, id_list))
+    print(updated_sheet)
 
-    # deleting unused columns
-    print('Deleting the unused column \n')
-    for k, v in tqdm(df_dict.items()):
-        df_dict[k].drop(['path', 'id', 'parent_id', 'level', 'object_id', 'object_type', 'query_status', 'query_type',
-                         'query_status', 'query_time', 'description', 'from.name', 'from.id', 'length', 'name'],
-                        axis='columns', inplace=True)
-        df_dict[k]['message_length'] = df_dict[k]['message'].str.len()
-        df_dict[k].dropna(inplace=True)
+    if updated_sheet:
+        # reading the data
+        print('reading a data')
+        for i in tqdm(updated_sheet):
+            df_dict.update({i.split('.', 1)[0]: pd.read_excel(path, sheet_name=i)})
 
+        # deleting unused columns
+        print('Deleting the unused column \n')
+        for k, v in tqdm(df_dict.items()):
+            df_dict[k].drop(
+                ['path', 'id', 'parent_id', 'level', 'object_id', 'object_type', 'query_status', 'query_type',
+                 'query_status', 'query_time', 'description', 'from.name', 'from.id', 'length', 'name'],
+                axis='columns', inplace=True)
+            df_dict[k]['message_length'] = df_dict[k]['message'].str.len()
+            df_dict[k].dropna(inplace=True)
 
-    df_dict = lang_iden(df_dict)
+        df_dict = lang_iden(df_dict)
 
+        print('creating sentiment score \n')
+        for k, v in tqdm(df_dict.items()):
+            df_sent.update({k: sentiment_analysis(df_dict[k])})
 
-    print('creating sentiment score \n')
-    for k, v in tqdm(df_dict.items()):
-        df_sent.update({k: sentiment_analysis(df_dict[k])})
+        df_dict = new_intent(df_dict)
 
-    df_dict = new_intent(df_dict)
+        return df_dict, df_sent, json_data
 
-    return df_dict, df_sent
+    else:
+        print("List is empty")
+        return 0,0,0
 
 
 
@@ -264,7 +284,6 @@ def json_data_gen(df_dict, df_sent):
     print('Data extraction process')
     for k, v in df_dict.items():
         # positive and negative comment count
-
         p = list(df_sent[k][df_sent[k]['compound'] > 0].count())
         pos = p[0]
         n = list(df_sent[k][df_sent[k]['compound'] < 0].count())
@@ -278,20 +297,45 @@ def json_data_gen(df_dict, df_sent):
         for r, u in value_dict.items():
             new_dict.update({r: percentage_match(df_dict[k].shape[0], u)})
 
+        '''
         # message separation for the 1.asking help 2. willing to help
 
         ask = df_dict[k][df_dict[k]['intent'] == 'asking_help']
         will = df_dict[k][df_dict[k]['intent'] == 'willing_to_help']
         comments = pd.concat([ask, will])
+
+        #adding key date into the dictionary
+        temp_date = comments['created_time'].loc[0]
+        match = re.search(r'\d{4}-\d{2}-\d{2}', temp_date)
+        date_id = str(datetime.datetime.strptime(match.group(), '%Y-%m-%d').date())
+
+        #sorting data message lengthwise
         comments = comments.sort_values('message_length', ascending=False)
         comments.insert(0, 'id', range(0, 0 + len(comments)))
-        comments.drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',
-                      inplace=True)
+        comments.drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',inplace=True)
         comments.rename(columns={'id.1': 'user_id'}, inplace=True)
         comm_j = comments.to_json(orient='records')
 
-        json_dict.update(
-            {k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j}})
+        json_dict.update({k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j, 'date':date_id}})
+        #json_dict.update({k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j}})
+        '''
+
+        # adding key date into the dictionary
+        temp_date = df_dict[k]['created_time'].loc[0]
+        match = re.search(r'\d{4}-\d{2}-\d{2}', temp_date)
+        date_id = str(datetime.datetime.strptime(match.group(), '%Y-%m-%d').date())
+        #converting suggestion category into problem faced
+        df_dict[k].loc[df_dict[k]['intent'] == 'suggestion', 'intent'] = 'problem_faced'
+        # sorting data message lengthwise
+        df_dict[k] = df_dict[k].sort_values('message_length', ascending=False)
+        df_dict[k].insert(0, 'id', range(0, 0 + len(df_dict[k])))
+        df_dict[k].drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',
+                      inplace=True)
+        df_dict[k].rename(columns={'id.1': 'user_id'}, inplace=True)
+        comm_j = df_dict[k].to_json(orient='records')
+
+        json_dict.update({k: {'sentiment': {'positive': pos, 'negative': neg}, 'piechart': new_dict, 'comments': comm_j,
+                              'date': date_id}})
 
     return json_dict
 
@@ -325,20 +369,44 @@ def upload():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
             path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
 
-            df_dict, df_sent = data_processing(path)
+            df_dict, df_sent, json_data = data_processing(path)
 
-            json_dict = json_data_gen(df_dict, df_sent)
-            print(json_dict.keys())
+            if df_dict:
+                json_dict = json_data_gen(df_dict, df_sent)
+                if json_dict:
+                    print(json_dict.keys())
+                    json_data.update(json_dict)
+                    with open(dump_path, 'w') as fp:
+                        json.dump(json_data, fp)
 
-            with open(dump_path, 'w') as fp:
-                json.dump(json_dict, fp)
+                    return " success "
 
-            return " success "
+            else:
+                return "current data is upto date "
+
+
+
+
 
 
 @app.route('/get_data/id_list/', methods=['GET'])
 def get_tasks1():
-    return jsonify(id_list)
+    if id_list:
+        return jsonify(id_list)
+    else:
+        return 0
+
+
+@app.route('/get_data/new_id_list/', methods=['GET'])
+def get_tasks2():
+    new_id = {}
+    if id_list:
+        for i in id_list:
+            new_id.update({i : json_data[i]['date']})
+        return jsonify(new_id)
+    else:
+        return 0
+
 
 
 @app.route('/get_data/<page_id>', methods=['GET'])
@@ -363,7 +431,6 @@ def page(page_id):
 
 if __name__ == '__main__':
     app.run(debug=True)
-
 
 
 
