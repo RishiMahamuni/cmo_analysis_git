@@ -255,8 +255,6 @@ def new_intent_clean(s):
     return clean
 
 
-
-
 def new_intent(old_df_dict):
     df_dict={}
     xls = xlrd.open_workbook('vdo_intent_all.xlsx', on_demand=True)

@@ -33,8 +33,7 @@ js_name = 'json_dict.json'
 dump_path = os.path.join(app.config['UPLOAD_FOLDER'], js_name)
 
 
-
-    # reading existing keys from the json
+# reading existing keys from the json
 with open(dump_path, encoding='utf-8') as F:
     try:
         json_data = json.loads(F.read())
@@ -277,6 +276,11 @@ def data_processing(path):
         return 0,0,0
 
 
+def url_generator(s):
+    base_link = " https://www.facebook.com/CMOMaharashtra/videos/"+ s.split('_')[0] +"/?comment_id=" + s.split('_')[1]
+    return base_link
+
+
 
 #json data generator
 def json_data_gen(df_dict, df_sent):
@@ -326,11 +330,14 @@ def json_data_gen(df_dict, df_sent):
         date_id = str(datetime.datetime.strptime(match.group(), '%Y-%m-%d').date())
         #converting suggestion category into problem faced
         df_dict[k].loc[df_dict[k]['intent'] == 'suggestion', 'intent'] = 'problem_faced'
+
+        # creating user_id redirection column
+        df_dict[k]['url_link'] = df_dict[k]['id.1'].apply(url_generator)
+
         # sorting data message lengthwise
         df_dict[k] = df_dict[k].sort_values('message_length', ascending=False)
         df_dict[k].insert(0, 'id', range(0, 0 + len(df_dict[k])))
-        df_dict[k].drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',
-                      inplace=True)
+        df_dict[k].drop(['created_time', 'like_count', 'message_length', 'language', 'sep_words'], axis='columns',inplace=True)
         df_dict[k].rename(columns={'id.1': 'user_id'}, inplace=True)
         comm_j = df_dict[k].to_json(orient='records')
 
@@ -386,9 +393,6 @@ def upload():
 
 
 
-
-
-
 @app.route('/get_data/id_list/', methods=['GET'])
 def get_tasks1():
     if id_list:
@@ -397,13 +401,15 @@ def get_tasks1():
         return 0
 
 
+
 @app.route('/get_data/new_id_list/', methods=['GET'])
 def get_tasks2():
-    new_id = {}
+    data = []
     if id_list:
         for i in id_list:
-            new_id.update({i : json_data[i]['date']})
-        return jsonify(new_id)
+            new_id = {'id': i, 'date': json_data[i]['date']}
+            data.append(dict(new_id))
+        return jsonify(data)
     else:
         return 0
 
@@ -451,7 +457,7 @@ def intent_analysis(df_dict):
                'understand', 'properly', 'plasma', 'plan', 'refund', 'pandemonium',
                'crowd', 'decisive', 'stop']
 
-    negative = ['fail', 'failure', 'not', 'cheap', 'garbage', 'dissatisfactory', 'careless', 'unsatisfactory',
+    negative = ['fail', 'failure', 'not', 'cheap', 'garbage', 'dissatisfaction', 'careless', 'unsatisfactory',
                 'horrible', 'sad', 'imperfect', 'incorrect', 'inadequate', 'defective'
         , 'wrong', 'blaming', 'failed', 'bla', 'better', 'stunt', 'pr', 'dumb', 'fake cm', 'resign', 'disgusting',
                 'useless']
